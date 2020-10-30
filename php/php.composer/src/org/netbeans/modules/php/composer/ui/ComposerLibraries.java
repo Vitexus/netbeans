@@ -19,22 +19,30 @@
 package org.netbeans.modules.php.composer.ui;
 
 import java.awt.Image;
+import java.awt.event.ActionEvent;
 import java.beans.PropertyChangeEvent;
 import java.beans.PropertyChangeListener;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
+import java.util.logging.Level;
 import java.util.logging.Logger;
+import javax.swing.AbstractAction;
 import javax.swing.Action;
 import javax.swing.event.ChangeListener;
 import org.netbeans.api.annotations.common.StaticResource;
 import org.netbeans.api.project.Project;
+import org.netbeans.api.project.ui.OpenProjects;
 import org.netbeans.modules.php.api.phpmodule.PhpModule;
 import org.netbeans.modules.php.composer.files.ComposerJson;
 import org.netbeans.modules.php.composer.files.ComposerLock;
 import org.netbeans.modules.php.composer.util.ComposerUtils;
+
+import org.netbeans.modules.php.project.PhpProject;
 import org.netbeans.spi.project.ui.support.NodeFactory;
 import org.netbeans.spi.project.ui.support.NodeList;
 import org.openide.filesystems.FileObject;
@@ -48,10 +56,12 @@ import org.openide.util.ImageUtilities;
 import org.openide.util.NbBundle;
 import org.openide.util.WeakListeners;
 
+import org.openide.util.ContextAwareAction;
+import org.openide.util.Lookup;
+
 public final class ComposerLibraries {
 
     static final Logger LOGGER = Logger.getLogger(ComposerLibraries.class.getName());
-
 
     private ComposerLibraries() {
     }
@@ -62,7 +72,6 @@ public final class ComposerLibraries {
     }
 
     //~ Inner classes
-
     private static final class ComposerLibrariesNodeFactory implements NodeFactory {
 
         @Override
@@ -82,7 +91,6 @@ public final class ComposerLibraries {
 
         // @GuardedBy("thread")
         private Node composerLibrariesNode;
-
 
         ComposerLibrariesNodeList(Project project) {
             assert project != null;
@@ -148,13 +156,61 @@ public final class ComposerLibraries {
 
     }
 
+    /**
+     * @return <i>Open Project</i>
+     * @see SubProjectsNode
+     */
+    static String BTN_Open_Project() {
+        return org.openide.util.NbBundle.getMessage(Bundle.class, "BTN_Open_Project");
+    }
+
+    private static class OpenProjectAction extends AbstractAction implements ContextAwareAction {
+
+        static final OpenProjectAction SINGLETON = new OpenProjectAction();
+
+        private OpenProjectAction() {
+        }
+
+        public @Override
+        void actionPerformed(ActionEvent e) {
+            assert false;
+        }
+
+        @NbBundle.Messages("BTN_Open_Project=Open Project")
+
+        public @Override
+        Action createContextAwareInstance(final Lookup context) {
+            return new AbstractAction(BTN_Open_Project()) {
+                public @Override
+                void actionPerformed(ActionEvent e) {
+                    Set<Project> projects = new HashSet<Project>();
+
+                    for (PhpProject project : context.lookupAll(PhpProject.class)) {
+
+                        LOGGER.log(Level.INFO, "found {0}", new Object[]{project});
+
+//                        File f = project.getFile();
+//                        if (f != null) {
+//
+//                            PhpProject phpProject = org.netbeans.modules.php.project.util.PhpProjectUtils.getPhpProject(f);
+//                            if (phpProject != null) {
+//                                projects.add(phpProject);
+//                            }
+//                        }
+                    }
+                    OpenProjects.getDefault().open(projects.toArray(new PhpProject[projects.size()]), false, true);
+                }
+            };
+        }
+
+    }
+
     private static final class ComposerLibrariesNode extends AbstractNode {
 
         @StaticResource
         private static final String LIBRARIES_BADGE = "org/netbeans/modules/php/composer/ui/resources/libraries-badge.png"; // NOI18N
 
         private final Node iconDelegate;
-
 
         ComposerLibrariesNode(ComposerLibrariesChildren npmLibrariesChildren) {
             super(npmLibrariesChildren);
@@ -177,9 +233,23 @@ public final class ComposerLibraries {
             return getIcon(type);
         }
 
+//        @Override
+//        public Action[] getActions(boolean context) {
+//
+//            //[NETBEANS-2948]
+//            List<Action> actions = new ArrayList<>();
+////            actions.add(SystemAction.get(OpenProjectAction.class));
+//            
+//            actions.add(OpenProjectAction.class);
+//
+//            actions.add(null);
+//
+//            return actions.toArray(new Action[actions.size()]);
+//        }
+
         @Override
-        public Action[] getActions(boolean context) {
-            return new Action[0];
+        public Action getPreferredAction() {
+            return OpenProjectAction.SINGLETON;
         }
 
     }
@@ -191,11 +261,9 @@ public final class ComposerLibraries {
         @StaticResource
         private static final String DEV_BADGE = "org/netbeans/modules/php/composer/ui/resources/libraries-dev-badge.gif"; // NOI18N
 
-
         private final ComposerJson composerJson;
         private final ComposerLock composerLock;
         private final java.util.Map<String, Image> icons = new HashMap<>();
-
 
         public ComposerLibrariesChildren(ComposerJson composerJson, ComposerLock composerLock) {
             super(true);
@@ -215,7 +283,7 @@ public final class ComposerLibraries {
 
         @Override
         protected Node[] createNodes(ComposerLibraryInfo key) {
-            return new Node[] {new NpmLibraryNode(key)};
+            return new Node[]{new NpmLibraryNode(key)};
         }
 
         @Override
@@ -253,8 +321,7 @@ public final class ComposerLibraries {
             "# {0} - library description",
             "# {1} - library type",
             "ComposerLibrariesChildren.description.type={0} ({1})",
-            "ComposerLibrariesChildren.na=n/a",
-        })
+            "ComposerLibrariesChildren.na=n/a",})
         private List<ComposerLibraryInfo> getKeys(java.util.Map<String, String> dependencies, java.util.Map<String, String> packages,
                 String badge, String libraryType) {
             if (dependencies.isEmpty()) {
@@ -302,7 +369,6 @@ public final class ComposerLibraries {
 
         private final ComposerLibraryInfo libraryInfo;
 
-
         NpmLibraryNode(ComposerLibraryInfo libraryInfo) {
             super(Children.LEAF);
             this.libraryInfo = libraryInfo;
@@ -340,7 +406,6 @@ public final class ComposerLibraries {
         final Image icon;
         final String name;
         final String description;
-
 
         ComposerLibraryInfo(Image icon, String name, String descrition) {
             assert icon != null;
