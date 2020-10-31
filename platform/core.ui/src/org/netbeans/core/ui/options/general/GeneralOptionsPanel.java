@@ -158,6 +158,7 @@ public class GeneralOptionsPanel extends JPanel implements ActionListener {
             lblUsageInfo.setVisible(false);
             lblLearnMore.setVisible(false);
         }
+        
     }
     
     /** This method is called from within the constructor to
@@ -193,9 +194,19 @@ public class GeneralOptionsPanel extends JPanel implements ActionListener {
         bTestConnection = new javax.swing.JButton();
         lblTestResult = new javax.swing.JLabel();
         pbProxyWaiting = new javax.swing.JProgressBar();
+        jPanel2 = new javax.swing.JPanel();
+        jSeparator1 = new javax.swing.JSeparator();
+        lRecentProjects = new javax.swing.JLabel();
+        recentProjectsCount = new javax.swing.JTextField();
 
         lWebBrowser.setLabelFor(cbWebBrowser);
         org.openide.awt.Mnemonics.setLocalizedText(lWebBrowser, org.openide.util.NbBundle.getMessage(GeneralOptionsPanel.class, "GeneralOptionsPanel.lWebBrowser.text")); // NOI18N
+
+        cbWebBrowser.addActionListener(new java.awt.event.ActionListener() {
+            public void actionPerformed(java.awt.event.ActionEvent evt) {
+                cbWebBrowserActionPerformed(evt);
+            }
+        });
 
         org.openide.awt.Mnemonics.setLocalizedText(lWebProxy, org.openide.util.NbBundle.getMessage(GeneralOptionsPanel.class, "LBL_GeneralOptionsPanel_lWebProxy")); // NOI18N
 
@@ -230,6 +241,11 @@ public class GeneralOptionsPanel extends JPanel implements ActionListener {
             }
             public void focusLost(java.awt.event.FocusEvent evt) {
                 tfProxyPortFocusLost(evt);
+            }
+        });
+        tfProxyPort.addActionListener(new java.awt.event.ActionListener() {
+            public void actionPerformed(java.awt.event.ActionEvent evt) {
+                tfProxyPortActionPerformed(evt);
             }
         });
 
@@ -313,6 +329,38 @@ public class GeneralOptionsPanel extends JPanel implements ActionListener {
 
         pbProxyWaiting.setIndeterminate(true);
 
+        org.openide.awt.Mnemonics.setLocalizedText(lRecentProjects, org.openide.util.NbBundle.getMessage(GeneralOptionsPanel.class, "GeneralOptionsPanel.lRecentProjects.text")); // NOI18N
+
+        recentProjectsCount.setText(org.openide.util.NbBundle.getMessage(GeneralOptionsPanel.class, "GeneralOptionsPanel.recentProjectsCount.text")); // NOI18N
+        recentProjectsCount.setToolTipText(org.openide.util.NbBundle.getMessage(GeneralOptionsPanel.class, "GeneralOptionsPanel.recentProjectsCount.toolTipText")); // NOI18N
+        recentProjectsCount.addActionListener(new java.awt.event.ActionListener() {
+            public void actionPerformed(java.awt.event.ActionEvent evt) {
+                recentProjectsCountActionPerformed(evt);
+            }
+        });
+
+        javax.swing.GroupLayout jPanel2Layout = new javax.swing.GroupLayout(jPanel2);
+        jPanel2.setLayout(jPanel2Layout);
+        jPanel2Layout.setHorizontalGroup(
+            jPanel2Layout.createParallelGroup(javax.swing.GroupLayout.Alignment.LEADING)
+            .addGroup(jPanel2Layout.createSequentialGroup()
+                .addComponent(lRecentProjects)
+                .addGap(18, 18, 18)
+                .addComponent(recentProjectsCount, javax.swing.GroupLayout.PREFERRED_SIZE, 34, javax.swing.GroupLayout.PREFERRED_SIZE)
+                .addGap(0, 0, Short.MAX_VALUE))
+            .addComponent(jSeparator1, javax.swing.GroupLayout.Alignment.TRAILING)
+        );
+        jPanel2Layout.setVerticalGroup(
+            jPanel2Layout.createParallelGroup(javax.swing.GroupLayout.Alignment.LEADING)
+            .addGroup(jPanel2Layout.createSequentialGroup()
+                .addComponent(jSeparator1, javax.swing.GroupLayout.PREFERRED_SIZE, 11, javax.swing.GroupLayout.PREFERRED_SIZE)
+                .addGap(3, 3, 3)
+                .addGroup(jPanel2Layout.createParallelGroup(javax.swing.GroupLayout.Alignment.BASELINE)
+                    .addComponent(lRecentProjects)
+                    .addComponent(recentProjectsCount, javax.swing.GroupLayout.PREFERRED_SIZE, javax.swing.GroupLayout.DEFAULT_SIZE, javax.swing.GroupLayout.PREFERRED_SIZE))
+                .addGap(0, 15, Short.MAX_VALUE))
+        );
+
         javax.swing.GroupLayout layout = new javax.swing.GroupLayout(this);
         this.setLayout(layout);
         layout.setHorizontalGroup(
@@ -323,17 +371,17 @@ public class GeneralOptionsPanel extends JPanel implements ActionListener {
                     .addGroup(javax.swing.GroupLayout.Alignment.TRAILING, layout.createSequentialGroup()
                         .addComponent(lWebBrowser)
                         .addGap(18, 18, 18)
-                        .addComponent(cbWebBrowser, 0, 1317, Short.MAX_VALUE)
+                        .addComponent(cbWebBrowser, 0, javax.swing.GroupLayout.DEFAULT_SIZE, Short.MAX_VALUE)
                         .addPreferredGap(javax.swing.LayoutStyle.ComponentPlacement.RELATED)
                         .addComponent(editBrowserButton))
-                    .addComponent(jSeparator2, javax.swing.GroupLayout.DEFAULT_SIZE, 1495, Short.MAX_VALUE)
+                    .addComponent(jSeparator2)
                     .addGroup(layout.createSequentialGroup()
                         .addComponent(lWebProxy)
                         .addGap(18, 18, 18)
                         .addGroup(layout.createParallelGroup(javax.swing.GroupLayout.Alignment.LEADING)
                             .addGroup(layout.createSequentialGroup()
                                 .addGap(90, 90, 90)
-                                .addComponent(errorLabel, javax.swing.GroupLayout.DEFAULT_SIZE, 1313, Short.MAX_VALUE))
+                                .addComponent(errorLabel, javax.swing.GroupLayout.DEFAULT_SIZE, javax.swing.GroupLayout.DEFAULT_SIZE, Short.MAX_VALUE))
                             .addGroup(layout.createSequentialGroup()
                                 .addGroup(layout.createParallelGroup(javax.swing.GroupLayout.Alignment.LEADING)
                                     .addGroup(layout.createSequentialGroup()
@@ -343,7 +391,7 @@ public class GeneralOptionsPanel extends JPanel implements ActionListener {
                                                 .addPreferredGap(javax.swing.LayoutStyle.ComponentPlacement.RELATED)
                                                 .addComponent(lProxyHost)
                                                 .addPreferredGap(javax.swing.LayoutStyle.ComponentPlacement.RELATED)
-                                                .addComponent(tfProxyHost, javax.swing.GroupLayout.DEFAULT_SIZE, 1055, Short.MAX_VALUE))
+                                                .addComponent(tfProxyHost))
                                             .addGroup(layout.createSequentialGroup()
                                                 .addGroup(layout.createParallelGroup(javax.swing.GroupLayout.Alignment.LEADING)
                                                     .addComponent(rbNoProxy)
@@ -366,9 +414,11 @@ public class GeneralOptionsPanel extends JPanel implements ActionListener {
                                         .addComponent(pbProxyWaiting, javax.swing.GroupLayout.PREFERRED_SIZE, 90, javax.swing.GroupLayout.PREFERRED_SIZE)
                                         .addGap(0, 0, Short.MAX_VALUE)))
                                 .addContainerGap())))
-                    .addComponent(jSeparator3, javax.swing.GroupLayout.DEFAULT_SIZE, 1495, Short.MAX_VALUE)
-                    .addGroup(layout.createSequentialGroup()
-                        .addComponent(jPanel1, javax.swing.GroupLayout.PREFERRED_SIZE, 0, Short.MAX_VALUE)
+                    .addComponent(jSeparator3)
+                    .addGroup(javax.swing.GroupLayout.Alignment.TRAILING, layout.createSequentialGroup()
+                        .addGroup(layout.createParallelGroup(javax.swing.GroupLayout.Alignment.TRAILING)
+                            .addComponent(jPanel2, javax.swing.GroupLayout.Alignment.LEADING, javax.swing.GroupLayout.DEFAULT_SIZE, javax.swing.GroupLayout.DEFAULT_SIZE, Short.MAX_VALUE)
+                            .addComponent(jPanel1, javax.swing.GroupLayout.DEFAULT_SIZE, 1934, Short.MAX_VALUE))
                         .addContainerGap())))
         );
         layout.setVerticalGroup(
@@ -409,7 +459,9 @@ public class GeneralOptionsPanel extends JPanel implements ActionListener {
                 .addComponent(jSeparator3, javax.swing.GroupLayout.PREFERRED_SIZE, 10, javax.swing.GroupLayout.PREFERRED_SIZE)
                 .addPreferredGap(javax.swing.LayoutStyle.ComponentPlacement.UNRELATED)
                 .addComponent(jPanel1, javax.swing.GroupLayout.PREFERRED_SIZE, javax.swing.GroupLayout.DEFAULT_SIZE, javax.swing.GroupLayout.PREFERRED_SIZE)
-                .addContainerGap())
+                .addPreferredGap(javax.swing.LayoutStyle.ComponentPlacement.RELATED, javax.swing.GroupLayout.DEFAULT_SIZE, Short.MAX_VALUE)
+                .addComponent(jPanel2, javax.swing.GroupLayout.PREFERRED_SIZE, javax.swing.GroupLayout.DEFAULT_SIZE, javax.swing.GroupLayout.PREFERRED_SIZE)
+                .addContainerGap(javax.swing.GroupLayout.DEFAULT_SIZE, Short.MAX_VALUE))
         );
 
         bMoreProxy.getAccessibleContext().setAccessibleName(org.openide.util.NbBundle.getMessage(GeneralOptionsPanel.class, "LBL_GeneralOptionsPanel_bMoreProxy.AN")); // NOI18N
@@ -525,6 +577,18 @@ private void bMoreProxyActionPerformed(java.awt.event.ActionEvent evt) {//GEN-FI
         
         GeneralOptionsModel.testConnection(this, type, host, port, nonProxyHosts);     
     }//GEN-LAST:event_bTestConnectionActionPerformed
+
+    private void recentProjectsCountActionPerformed(java.awt.event.ActionEvent evt) {//GEN-FIRST:event_recentProjectsCountActionPerformed
+        // TODO add your handling code here:
+    }//GEN-LAST:event_recentProjectsCountActionPerformed
+
+    private void cbWebBrowserActionPerformed(java.awt.event.ActionEvent evt) {//GEN-FIRST:event_cbWebBrowserActionPerformed
+        // TODO add your handling code here:
+    }//GEN-LAST:event_cbWebBrowserActionPerformed
+
+    private void tfProxyPortActionPerformed(java.awt.event.ActionEvent evt) {//GEN-FIRST:event_tfProxyPortActionPerformed
+        // TODO add your handling code here:
+    }//GEN-LAST:event_tfProxyPortActionPerformed
     
     // Variables declaration - do not modify//GEN-BEGIN:variables
     private javax.swing.JButton bMoreProxy;
@@ -534,11 +598,14 @@ private void bMoreProxyActionPerformed(java.awt.event.ActionEvent evt) {//GEN-FI
     private javax.swing.JButton editBrowserButton;
     private javax.swing.JLabel errorLabel;
     private javax.swing.JPanel jPanel1;
+    private javax.swing.JPanel jPanel2;
+    private javax.swing.JSeparator jSeparator1;
     private javax.swing.JSeparator jSeparator2;
     private javax.swing.JSeparator jSeparator3;
     private javax.swing.JCheckBox jUsageCheck;
     private javax.swing.JLabel lProxyHost;
     private javax.swing.JLabel lProxyPort;
+    private javax.swing.JLabel lRecentProjects;
     private javax.swing.JLabel lUsage;
     private javax.swing.JLabel lWebBrowser;
     private javax.swing.JLabel lWebProxy;
@@ -549,6 +616,7 @@ private void bMoreProxyActionPerformed(java.awt.event.ActionEvent evt) {//GEN-FI
     private javax.swing.JRadioButton rbHTTPProxy;
     private javax.swing.JRadioButton rbNoProxy;
     private javax.swing.JRadioButton rbUseSystemProxy;
+    private javax.swing.JTextField recentProjectsCount;
     private javax.swing.JTextField tfProxyHost;
     private javax.swing.JTextField tfProxyPort;
     // End of variables declaration//GEN-END:variables
@@ -682,6 +750,8 @@ private void bMoreProxyActionPerformed(java.awt.event.ActionEvent evt) {//GEN-FI
         jUsageCheck.setSelected(model.getUsageStatistics());
         
         updateWebBrowsers();
+        
+        recentProjectsCount.setText (model.getRecentProjectsCount());
     }
     
     private void updateWebBrowsers() {
@@ -757,6 +827,7 @@ private void bMoreProxyActionPerformed(java.awt.event.ActionEvent evt) {//GEN-FI
         editor.setAsText ((String) cbWebBrowser.getSelectedItem ());
 
         model.setUsageStatistics(jUsageCheck.isSelected());
+        model.setRecentProjectsCount(recentProjectsCount.getText());
     }
     
     void cancel () {

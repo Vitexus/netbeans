@@ -29,6 +29,7 @@ import java.util.StringTokenizer;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.util.prefs.Preferences;
+import org.netbeans.core.IDESettings;
 import org.netbeans.core.ProxySettings;
 import org.openide.util.NbBundle;
 import org.openide.util.NbPreferences;
@@ -221,6 +222,18 @@ class GeneralOptionsModel {
         });
     }    
         
+    
+    String getRecentProjectsCount () {
+        return String.valueOf(IDESettings.getRecentProjectsCount());
+    }
+    
+    void setRecentProjectsCount (String recentProjects) {
+        IDESettings.setRecentProjectsCount( Integer.parseInt(recentProjects) );
+    }
+    
+    
+    
+    
     // private helper methods ..................................................
     
     private static void testProxy(GeneralOptionsPanel panel, int proxyType,

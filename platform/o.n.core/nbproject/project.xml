@@ -273,6 +273,8 @@
                 <friend>org.netbeans.modules.options.api</friend>
                 <friend>org.netbeans.modules.web.browser.api</friend>
                 <friend>org.openide.compat</friend>
+                <friend>org.netbeans.modules.projectui</friend>
+                
                 <package>org.netbeans.beaninfo.editors</package>
                 <package>org.netbeans.core</package>
                 <package>org.netbeans.core.actions</package>

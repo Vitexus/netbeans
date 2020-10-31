@@ -104,6 +104,7 @@ import org.openide.util.RequestProcessor;
 import org.openide.util.Utilities;
 import org.openide.util.WeakListeners;
 import org.openide.windows.WindowManager;
+import org.netbeans.core.IDESettings;
 
 /**
  * List of projects open in the GUI.
@@ -186,7 +187,7 @@ public final class OpenProjectList {
             }
         };
         pchSupport = new PropertyChangeSupport( this );
-        recentProjects = new RecentProjectList(10); // #47134
+        recentProjects = new RecentProjectList( IDESettings.getRecentProjectsCount() ); //[NETBEANS-4973]
         recentTemplates = new ArrayList<String>();
         projectGroupSupport = new ArrayList<ProjectGroupChangeListener>();
     }
