@@ -30,6 +30,7 @@ import com.sun.source.tree.Tree.Kind;
 import com.sun.source.tree.VariableTree;
 import com.sun.source.util.TreePath;
 import com.vladsch.flexmark.html2md.converter.FlexmarkHtmlConverter;
+import java.io.File;
 import java.io.IOException;
 import java.net.MalformedURLException;
 import java.util.ArrayList;
@@ -37,6 +38,7 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.EnumMap;
 import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -50,6 +52,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BiConsumer;
+import java.util.function.IntFunction;
 import java.util.prefs.Preferences;
 import javax.lang.model.element.Element;
 import javax.lang.model.element.ElementKind;
@@ -76,6 +79,7 @@ import org.eclipse.lsp4j.CompletionItemKind;
 import org.eclipse.lsp4j.CompletionList;
 import org.eclipse.lsp4j.CompletionParams;
 import org.eclipse.lsp4j.CompletionTriggerKind;
+import org.eclipse.lsp4j.CreateFile;
 import org.eclipse.lsp4j.DefinitionParams;
 import org.eclipse.lsp4j.Diagnostic;
 import org.eclipse.lsp4j.DiagnosticSeverity;
@@ -99,10 +103,14 @@ import org.eclipse.lsp4j.MarkupContent;
 import org.eclipse.lsp4j.MessageParams;
 import org.eclipse.lsp4j.MessageType;
 import org.eclipse.lsp4j.Position;
+import org.eclipse.lsp4j.PrepareRenameParams;
+import org.eclipse.lsp4j.PrepareRenameResult;
 import org.eclipse.lsp4j.PublishDiagnosticsParams;
 import org.eclipse.lsp4j.Range;
 import org.eclipse.lsp4j.ReferenceParams;
+import org.eclipse.lsp4j.RenameFile;
 import org.eclipse.lsp4j.RenameParams;
+import org.eclipse.lsp4j.ResourceOperation;
 import org.eclipse.lsp4j.SignatureHelp;
 import org.eclipse.lsp4j.SignatureHelpParams;
 import org.eclipse.lsp4j.SymbolInformation;
@@ -143,9 +151,13 @@ import org.netbeans.modules.java.completion.JavaDocumentationTask;
 import org.netbeans.modules.java.editor.base.semantic.MarkOccurrencesHighlighterBase;
 import org.netbeans.modules.java.editor.codegen.GeneratorUtils;
 import org.netbeans.modules.java.editor.options.MarkOccurencesSettings;
+import org.netbeans.modules.java.hints.errors.CreateFixBase;
 import org.netbeans.modules.java.hints.errors.ImportClass;
 import org.netbeans.modules.java.hints.infrastructure.CreatorBasedLazyFixList;
 import org.netbeans.modules.java.hints.infrastructure.ErrorHintsProvider;
+import org.netbeans.modules.java.hints.introduce.IntroduceFixBase;
+import org.netbeans.modules.java.hints.introduce.IntroduceHint;
+import org.netbeans.modules.java.hints.introduce.IntroduceKind;
 import org.netbeans.modules.java.hints.project.IncompleteClassPath;
 import org.netbeans.modules.java.hints.spiimpl.JavaFixImpl;
 import org.netbeans.modules.java.hints.spiimpl.hints.HintsInvoker;
@@ -162,7 +174,15 @@ import org.netbeans.modules.parsing.spi.SchedulerEvent;
 import org.netbeans.modules.refactoring.api.Problem;
 import org.netbeans.modules.refactoring.api.RefactoringElement;
 import org.netbeans.modules.refactoring.api.RefactoringSession;
+import org.netbeans.modules.refactoring.api.RenameRefactoring;
 import org.netbeans.modules.refactoring.api.WhereUsedQuery;
+import org.netbeans.modules.refactoring.api.impl.APIAccessor;
+import org.netbeans.modules.refactoring.api.impl.SPIAccessor;
+import org.netbeans.modules.refactoring.java.spi.hooks.JavaModificationResult;
+import org.netbeans.modules.refactoring.plugins.FileRenamePlugin;
+import org.netbeans.modules.refactoring.spi.RefactoringCommit;
+import org.netbeans.modules.refactoring.spi.RefactoringElementImplementation;
+import org.netbeans.modules.refactoring.spi.Transaction;
 import org.netbeans.spi.editor.hints.EnhancedFix;
 import org.netbeans.spi.editor.hints.ErrorDescription;
 import org.netbeans.spi.editor.hints.Fix;
@@ -219,13 +239,15 @@ public class TextDocumentServiceImpl implements TextDocumentService, LanguageCli
                     JavaCompletionTask<CompletionItem> task = JavaCompletionTask.create(caret, new ItemFactoryImpl(client, controller, uri, ts.offset()), allCompletion ? EnumSet.of(Options.ALL_COMPLETION) : EnumSet.noneOf(Options.class), () -> false);
                     task.run(resultIterator);
                     List<CompletionItem> results = task.getResults();
-                    for (Iterator<CompletionItem> it = results.iterator(); it.hasNext();) {
-                        CompletionItem item = it.next();
-                        if (item == null) {
-                            it.remove();
+                    if (results != null) {
+                        for (Iterator<CompletionItem> it = results.iterator(); it.hasNext();) {
+                            CompletionItem item = it.next();
+                            if (item == null) {
+                                it.remove();
+                            }
                         }
+                        completionList.setItems(results);
                     }
-                    completionList.setItems(results);
                     completionList.setIsIncomplete(task.hasAdditionalClasses());
                 }
             });
@@ -680,12 +702,55 @@ public class TextDocumentServiceImpl implements TextDocumentService, LanguageCli
     }
 
     public static String html2MD(String html) {
-        return FlexmarkHtmlConverter.builder().build().convert(html).replaceAll("<br />[ \n]*$", "");
+        int idx = html.indexOf("<p id=\"not-found\">"); // strip "No Javadoc found" message
+        return FlexmarkHtmlConverter.builder().build().convert(idx >= 0 ? html.substring(0, idx) : html).replaceAll("<br />[ \n]*$", "");
     }
 
     @Override
     public CompletableFuture<Hover> hover(HoverParams params) {
-        throw new UnsupportedOperationException("Not supported yet.");
+        try {
+            String uri = params.getTextDocument().getUri();
+            FileObject file = Utils.fromUri(uri);
+            EditorCookie ec = file.getLookup().lookup(EditorCookie.class);
+            Document doc = ec.openDocument();
+            final JavaDocumentationTask<Future<String>> task = JavaDocumentationTask.create(Utils.getOffset(doc, params.getPosition()), null, new JavaDocumentationTask.DocumentationFactory<Future<String>>() {
+                @Override
+                public Future<String> create(CompilationInfo compilationInfo, Element element, Callable<Boolean> cancel) {
+                    return ElementJavadoc.create(compilationInfo, element, cancel).getTextAsync();
+                }
+            }, () -> false);
+            ParserManager.parse(Collections.singletonList(Source.create(doc)), new UserTask() {
+                @Override
+                public void run(ResultIterator resultIterator) throws Exception {
+                    task.run(resultIterator);
+                }
+            });
+            Future<String> futureJavadoc = task.getDocumentation();
+            CompletableFuture<Hover> result = new CompletableFuture<Hover>() {
+                @Override
+                public boolean cancel(boolean mayInterruptIfRunning) {
+                    return futureJavadoc != null && futureJavadoc.cancel(mayInterruptIfRunning) && super.cancel(mayInterruptIfRunning);
+                }
+            };
+            JAVADOC_WORKER.post(() -> {
+                try {
+                    String javadoc = futureJavadoc != null ? futureJavadoc.get() : null;
+                    if (javadoc != null) {
+                        MarkupContent markup = new MarkupContent();
+                        markup.setKind("markdown");
+                        markup.setValue(html2MD(javadoc));
+                        result.complete(new Hover(markup));
+                    } else {
+                        result.complete(null);
+                    }
+                } catch (ExecutionException | InterruptedException ex) {
+                    result.completeExceptionally(ex);
+                }
+            });
+            return result;
+        } catch (IOException | ParseException ex) {
+            throw new IllegalStateException(ex);
+        }
     }
 
     @Override
@@ -949,11 +1014,11 @@ public class TextDocumentServiceImpl implements TextDocumentService, LanguageCli
     @Override
     public CompletableFuture<List<Either<Command, CodeAction>>> codeAction(CodeActionParams params) {
         Document doc = openedDocuments.get(params.getTextDocument().getUri());
-        if (doc == null) {
+        JavaSource js = JavaSource.forDocument(doc);
+        if (doc == null || js == null) {
             return CompletableFuture.completedFuture(Collections.emptyList());
         }
         Map<String, ErrorDescription> id2Errors = (Map<String, ErrorDescription>) doc.getProperty("lsp-errors");
-        JavaSource js = JavaSource.forDocument(doc);
         List<Either<Command, CodeAction>> result = new ArrayList<>();
         if (id2Errors != null) {
         for (Diagnostic diag : params.getContext().getDiagnostics()) {
@@ -1037,17 +1102,97 @@ public class TextDocumentServiceImpl implements TextDocumentService, LanguageCli
                         client.logMessage(new MessageParams(MessageType.Error, ex.getMessage()));
                     }
                 }
+                if (f instanceof CreateFixBase) {
+                    try {
+                        CreateFixBase cf = (CreateFixBase) f;
+                        ModificationResult changes = cf.getModificationResult();
+                        List<Either<TextDocumentEdit, ResourceOperation>> documentChanges = new ArrayList<>();
+                        Set<File> newFiles = changes.getNewFiles();
+                        if (newFiles.size() > 1) {
+                            throw new IllegalStateException();
+                        }
+                        String newFilePath = null;
+                        for (File newFile : newFiles) {
+                            newFilePath = newFile.getPath();
+                            documentChanges.add(Either.forRight(new CreateFile(newFilePath)));
+                        }
+                        for (FileObject fileObject : changes.getModifiedFileObjects()) {
+                            List<? extends ModificationResult.Difference> diffs = changes.getDifferences(fileObject);
+                            if (diffs != null) {
+                                List<TextEdit> edits = new ArrayList<>();
+                                for (ModificationResult.Difference diff : diffs) {
+                                    String newText = diff.getNewText();
+                                    if (diff.getKind() == ModificationResult.Difference.Kind.CREATE) {
+                                        if (newFilePath != null) {
+                                            documentChanges.add(Either.forLeft(new TextDocumentEdit(new VersionedTextDocumentIdentifier(newFilePath, -1),
+                                                    Collections.singletonList(new TextEdit(new Range(Utils.createPosition(fileObject, 0), Utils.createPosition(fileObject, 0)),
+                                                            newText != null ? newText : "")))));
+                                        }
+                                    } else {
+                                        edits.add(new TextEdit(new Range(Utils.createPosition(fileObject, diff.getStartPosition().getOffset()),
+                                                                         Utils.createPosition(fileObject, diff.getEndPosition().getOffset())),
+                                                               newText != null ? newText : ""));
+                                    }
+                                }
+                                documentChanges.add(Either.forLeft(new TextDocumentEdit(new VersionedTextDocumentIdentifier(Utils.toUri(fileObject), -1), edits)));
+                            }
+                        }
+                        CodeAction codeAction = new CodeAction(f.getText());
+                        codeAction.setKind(CodeActionKind.QuickFix);
+                        codeAction.setEdit(new WorkspaceEdit(documentChanges));
+                        result.add(Either.forRight(codeAction));
+                    } catch (IOException ex) {
+                        client.logMessage(new MessageParams(MessageType.Error, ex.getMessage()));
+                    }
+                }
             }
         }
         }
 
-        //code generators:
         try {
             js.runUserActionTask(cc -> {
                 cc.toPhase(JavaSource.Phase.RESOLVED);
+                //code generators:
                 for (CodeGenerator codeGenerator : Lookup.getDefault().lookupAll(CodeGenerator.class)) {
                     for (CodeAction codeAction : codeGenerator.getCodeActions(cc, params)) {
                         result.add(Either.forRight(codeAction));
+                    }
+                }
+                //introduce hints
+                Range range = params.getRange();
+                if (!range.getStart().equals(range.getEnd())) {
+                    for (ErrorDescription err : IntroduceHint.computeError(cc, Utils.getOffset(doc, range.getStart()), Utils.getOffset(doc, range.getEnd()), new EnumMap<IntroduceKind, Fix>(IntroduceKind.class), new EnumMap<IntroduceKind, String>(IntroduceKind.class), new AtomicBoolean())) {
+                        for (Fix fix : err.getFixes().getFixes()) {
+                            if (fix instanceof IntroduceFixBase) {
+                                ModificationResult changes = ((IntroduceFixBase) fix).getModificationResult();
+                                if (changes != null) {
+                                    List<Either<TextDocumentEdit, ResourceOperation>> documentChanges = new ArrayList<>();
+                                    Set<? extends FileObject> fos = changes.getModifiedFileObjects();
+                                    if (fos.size() == 1) {
+                                        FileObject fileObject = fos.iterator().next();
+                                        List<? extends ModificationResult.Difference> diffs = changes.getDifferences(fileObject);
+                                        if (diffs != null) {
+                                            List<TextEdit> edits = new ArrayList<>();
+                                            for (ModificationResult.Difference diff : diffs) {
+                                                String newText = diff.getNewText();
+                                                edits.add(new TextEdit(new Range(Utils.createPosition(fileObject, diff.getStartPosition().getOffset()),
+                                                                                 Utils.createPosition(fileObject, diff.getEndPosition().getOffset())),
+                                                                       newText != null ? newText : ""));
+                                            }
+                                            documentChanges.add(Either.forLeft(new TextDocumentEdit(new VersionedTextDocumentIdentifier(Utils.toUri(fileObject), -1), edits)));
+                                        }
+                                        CodeAction codeAction = new CodeAction(fix.getText());
+                                        codeAction.setKind(CodeActionKind.RefactorExtract);
+                                        codeAction.setEdit(new WorkspaceEdit(documentChanges));
+                                        int renameOffset = ((IntroduceFixBase) fix).getNameOffset(changes);
+                                        if (renameOffset >= 0) {
+                                            codeAction.setCommand(new Command("Rename", "java.rename.element.at", Collections.singletonList(renameOffset)));
+                                        }
+                                        result.add(Either.forRight(codeAction));
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }, true);
@@ -1122,8 +1267,160 @@ public class TextDocumentServiceImpl implements TextDocumentService, LanguageCli
     }
 
     @Override
-    public CompletableFuture<WorkspaceEdit> rename(RenameParams arg0) {
-        throw new UnsupportedOperationException("Not supported yet.");
+    public CompletableFuture<Either<Range, PrepareRenameResult>> prepareRename(PrepareRenameParams params) {
+        JavaSource source = getSource(params.getTextDocument().getUri());
+        if (source == null) {
+            return CompletableFuture.completedFuture(Either.forLeft(null));
+        }
+        CompletableFuture<Either<Range, PrepareRenameResult>> result = new CompletableFuture<>();
+        try {
+            source.runUserActionTask(cc -> {
+                cc.toPhase(JavaSource.Phase.RESOLVED);
+                Document doc = cc.getSnapshot().getSource().getDocument(true);
+                int pos = Utils.getOffset(doc, params.getPosition());
+                TreePath path = cc.getTreeUtilities().pathFor(pos);
+                RenameRefactoring ref = new RenameRefactoring(Lookups.singleton(TreePathHandle.create(path, cc)));
+                ref.setNewName("any");
+                Problem p = ref.fastCheckParameters();
+                boolean hasFatalProblem = false;
+                while (p != null) {
+                    hasFatalProblem |= p.isFatal();
+                    p = p.getNext();
+                }
+                if (hasFatalProblem) {
+                    result.complete(null);
+                } else {
+                    //XXX: better range computation
+                    TokenSequence<JavaTokenId> ts = cc.getTokenHierarchy().tokenSequence(JavaTokenId.language());
+                    int d = ts.move(pos);
+                    if (ts.moveNext()) {
+                        if (d == 0 && ts.token().id() != JavaTokenId.IDENTIFIER) {
+                            ts.movePrevious();
+                        }
+                        Range r = new Range(Utils.createPosition(cc.getCompilationUnit(), ts.offset()),
+                                            Utils.createPosition(cc.getCompilationUnit(), ts.offset() + ts.token().length()));
+                        result.complete(Either.forRight(new PrepareRenameResult(r, ts.token().text().toString())));
+                    } else {
+                        result.complete(null);
+                    }
+                }
+            }, true);
+        } catch (IOException ex) {
+            result.completeExceptionally(ex);
+        }
+        return result;
+    }
+
+    @Override
+    public CompletableFuture<WorkspaceEdit> rename(RenameParams params) {
+        AtomicBoolean cancel = new AtomicBoolean();
+        Runnable[] cancelCallback = new Runnable[1];
+        CompletableFuture<WorkspaceEdit> result = new CompletableFuture<WorkspaceEdit>() {
+            @Override
+            public boolean cancel(boolean mayInterruptIfRunning) {
+                cancel.set(mayInterruptIfRunning);
+                if (cancelCallback[0] != null) {
+                    cancelCallback[0].run();
+                }
+                return super.cancel(mayInterruptIfRunning);
+            }
+        };
+        WORKER.post(() -> {
+            JavaSource js = getSource(params.getTextDocument().getUri());
+            try {
+                RenameRefactoring[] refactoring = new RenameRefactoring[1];
+                js.runUserActionTask(cc -> {
+                    cc.toPhase(JavaSource.Phase.RESOLVED);
+                    if (cancel.get()) return ;
+                    Document doc = cc.getSnapshot().getSource().getDocument(true);
+                    TreePath path = cc.getTreeUtilities().pathFor(Utils.getOffset(doc, params.getPosition()));
+                    List<Object> lookupContent = new ArrayList<>();
+
+                    lookupContent.add(TreePathHandle.create(path, cc));
+
+                    //from RenameRefactoringUI:
+                    Element selected = cc.getTrees().getElement(path);
+                    if (selected instanceof TypeElement && !((TypeElement) selected).getNestingKind().isNested()) {
+                        ElementHandle<TypeElement> handle = ElementHandle.create((TypeElement) selected);
+                        FileObject f = SourceUtils.getFile(handle, cc.getClasspathInfo());
+                        if (f != null && selected.getSimpleName().toString().equals(f.getName())) {
+                            lookupContent.add(f);
+                        }
+                    }
+
+                    refactoring[0] = new RenameRefactoring(Lookups.fixed(lookupContent.toArray(new Object[0])));
+                    refactoring[0].setNewName(params.getNewName());
+                    refactoring[0].setSearchInComments(true); //TODO?
+                }, true);
+                if (cancel.get()) return ;
+                cancelCallback[0] = () -> refactoring[0].cancelRequest();
+                RefactoringSession session = RefactoringSession.create("Rename");
+                Problem p;
+                p = refactoring[0].checkParameters();
+                if (cancel.get()) return ;
+                if (p != null && p.isFatal()) {
+                    result.completeExceptionally(new IllegalStateException(p.getMessage()));
+                    return ;
+                }
+                p = refactoring[0].preCheck();
+                if (p != null && p.isFatal()) {
+                    result.completeExceptionally(new IllegalStateException(p.getMessage()));
+                    return ;
+                }
+                if (cancel.get()) return ;
+                p = refactoring[0].prepare(session);
+                if (p != null && p.isFatal()) {
+                    result.completeExceptionally(new IllegalStateException(p.getMessage()));
+                    return ;
+                }
+                //TODO: check client capabilities!
+                List<Either<TextDocumentEdit, ResourceOperation>> resultChanges = new ArrayList<>();
+                List<Transaction> transactions = APIAccessor.DEFAULT.getCommits(session);
+                List<ModificationResult> results = new ArrayList<>();
+                for (Transaction t : transactions) {
+                    if (t instanceof RefactoringCommit) {
+                        RefactoringCommit c = (RefactoringCommit) t;
+                        for (org.netbeans.modules.refactoring.spi.ModificationResult refResult : SPIAccessor.DEFAULT.getTransactions(c)) {
+                            if (refResult instanceof JavaModificationResult) {
+                                results.add(((JavaModificationResult) refResult).delegate);
+                            } else {
+                                throw new IllegalStateException(refResult.getClass().toString());
+                            }
+                        }
+                    } else {
+                        throw new IllegalStateException(t.getClass().toString());
+                    }
+                }
+                for (ModificationResult mr : results) {
+                    for (FileObject modified : mr.getModifiedFileObjects()) {
+                        resultChanges.add(Either.forLeft(new TextDocumentEdit(new VersionedTextDocumentIdentifier(params.getTextDocument().getUri(), /*XXX*/-1), fileModifications(mr, modified, null))));
+                    }
+                }
+                List<RefactoringElementImplementation> fileChanges = APIAccessor.DEFAULT.getFileChanges(session);
+                for (RefactoringElementImplementation rei : fileChanges) {
+                    if (rei instanceof FileRenamePlugin.RenameFile) {
+                        String oldURI = params.getTextDocument().getUri();
+                        int dot = oldURI.lastIndexOf('.');
+                        int slash = oldURI.lastIndexOf('/');
+                        String newURI = oldURI.substring(0, slash + 1) + params.getNewName() + oldURI.substring(dot);
+                        ResourceOperation op = new RenameFile(oldURI, newURI);
+                        resultChanges.add(Either.forRight(op));
+                    } else {
+                        throw new IllegalStateException(rei.getClass().toString());
+                    }
+                }
+                for (RefactoringElement re : session.getRefactoringElements()) {
+                    //TODO: verify no unknown elements!
+                }
+
+                session.finished();
+
+                result.complete(new WorkspaceEdit(resultChanges));
+            } catch (Throwable ex) {
+                result.completeExceptionally(ex);
+            }
+        });
+        return result;
     }
 
     @Override
@@ -1178,8 +1475,16 @@ public class TextDocumentServiceImpl implements TextDocumentService, LanguageCli
 
     @Override
     public void didClose(DidCloseTextDocumentParams params) {
-        openedDocuments.remove(params.getTextDocument().getUri());
-        reportNotificationDone("didClose", params);
+        try {
+            FileObject file = Utils.fromUri(params.getTextDocument().getUri());
+            EditorCookie ec = file.getLookup().lookup(EditorCookie.class);
+            ec.close();
+            openedDocuments.remove(params.getTextDocument().getUri());
+        } catch (IOException ex) {
+            throw new IllegalStateException(ex);
+        } finally {
+            reportNotificationDone("didClose", params);
+        }
     }
 
     @Override
@@ -1234,7 +1539,7 @@ public class TextDocumentServiceImpl implements TextDocumentService, LanguageCli
                             case HINT: diag.setSeverity(DiagnosticSeverity.Hint); break;
                             default: diag.setSeverity(DiagnosticSeverity.Information); break;
                         }
-                        String id = keyPrefix + ":" + idx + "-" + err.getId();
+                        String id = keyPrefix + ":" + idx++ + "-" + err.getId();
                         diag.setCode(id);
                         id2Errors.put(id, err);
                         diags.add(diag);
@@ -1283,32 +1588,6 @@ public class TextDocumentServiceImpl implements TextDocumentService, LanguageCli
         }
     }
 
-    public static Position createPosition(CompilationUnitTree cut, int offset) {
-        return createPosition(cut.getLineMap(), offset);
-    }
-
-    public static Position createPosition(LineMap lm, int offset) {
-        return new Position((int) lm.getLineNumber(offset) - 1,
-                            (int) lm.getColumnNumber(offset) - 1);
-    }
-
-    public static Position createPosition(FileObject file, int offset) {
-        try {
-            EditorCookie ec = file.getLookup().lookup(EditorCookie.class);
-            StyledDocument doc = ec.openDocument();
-            int line = NbDocument.findLineNumber(doc, offset);
-            int column = NbDocument.findLineColumn(doc, offset);
-
-            return new Position(line, column);
-        } catch (IOException ex) {
-            throw new IllegalStateException(ex);
-        }
-    }
-
-    public static int getOffset(Document doc, Position pos) {
-        return LineDocumentUtils.getLineStartFromIndex((LineDocument) doc, pos.getLine()) + pos.getCharacter();
-    }
-
     public static List<TextEdit> modify2TextEdits(JavaSource js, Task<WorkingCopy> task) throws IOException {
         FileObject[] file = new FileObject[1];
         LineMap[] lm = new LineMap[1];
@@ -1317,27 +1596,34 @@ public class TextDocumentServiceImpl implements TextDocumentService, LanguageCli
             file[0] = wc.getFileObject();
             lm[0] = wc.getCompilationUnit().getLineMap();
         });
+        return fileModifications(changes, file[0], lm[0]);
+    }
+    
+    private static List<TextEdit> fileModifications(ModificationResult changes, FileObject file, LineMap lm) {
         //TODO: full, correct and safe edit production:
-        List<? extends ModificationResult.Difference> diffs = changes.getDifferences(file[0]);
+        List<? extends ModificationResult.Difference> diffs = changes.getDifferences(file);
         if (diffs == null) {
             return Collections.emptyList();
         }
         List<TextEdit> edits = new ArrayList<>();
+        IntFunction<Position> offset2Position = lm != null ? pos -> Utils.createPosition(lm, pos)
+                                                           : pos -> Utils.createPosition(file, pos);
+                                            
         for (ModificationResult.Difference diff : diffs) {
             String newText = diff.getNewText();
-            edits.add(new TextEdit(new Range(Utils.createPosition(lm[0], diff.getStartPosition().getOffset()),
-                                             Utils.createPosition(lm[0], diff.getEndPosition().getOffset())),
+            edits.add(new TextEdit(new Range(offset2Position.apply(diff.getStartPosition().getOffset()),
+                                             offset2Position.apply(diff.getEndPosition().getOffset())),
                                    newText != null ? newText : ""));
         }
         return edits;
     }
-    
+
     private static void reportNotificationDone(String s, Object parameter) {
         if (HOOK_NOTIFICATION != null) {
             HOOK_NOTIFICATION.accept(s, parameter);
         }
     }
-    
+
     /**
      * For testing only; calls that do not return a result should call
      * this hook, if defined, with the method name and parameter.
