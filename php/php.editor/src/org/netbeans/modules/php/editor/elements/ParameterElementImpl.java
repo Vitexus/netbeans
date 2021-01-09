@@ -298,7 +298,8 @@ public final class ParameterElementImpl implements ParameterElement {
     public String asString(OutputType outputType, TypeNameResolver typeNameResolver) {
         StringBuilder sb = new StringBuilder();
         Set<TypeResolver> typesResolvers = getTypes();
-        boolean forDeclaration = outputType.equals(OutputType.SHORTEN_DECLARATION) || outputType.equals(OutputType.COMPLETE_DECLARATION);
+        boolean forDeclaration = outputType == OutputType.COMPLETE_DECLARATION
+                || outputType == OutputType.SHORTEN_DECLARATION;
         if (forDeclaration) {
             String modifierString = BodyDeclaration.Modifier.toString(modifier);
             if (modifierString != null && !modifierString.isEmpty()) {
@@ -308,9 +309,12 @@ public final class ParameterElementImpl implements ParameterElement {
         }
         if (forDeclaration && hasDeclaredType()) {
             if (isUnionType) {
+                boolean firstType = true;
                 for (TypeResolver typeResolver : typesResolvers) {
                     if (typeResolver.isResolved()) {
-                        if (sb.length() > 0) {
+                        if (firstType) {
+                            firstType = false;
+                        } else {
                             sb.append(Type.SEPARATOR);
                         }
                         sb.append(typeNameResolver.resolve(typeResolver.getTypeName(false)));
