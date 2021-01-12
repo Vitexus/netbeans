@@ -55,6 +55,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BiConsumer;
 import java.util.function.IntFunction;
 import java.util.prefs.Preferences;
+import java.util.stream.Collectors;
 import javax.lang.model.element.Element;
 import javax.lang.model.element.ElementKind;
 import javax.lang.model.element.ExecutableElement;
@@ -192,6 +193,7 @@ import org.netbeans.spi.editor.hints.EnhancedFix;
 import org.netbeans.spi.editor.hints.ErrorDescription;
 import org.netbeans.spi.editor.hints.Fix;
 import org.netbeans.spi.editor.hints.LazyFixList;
+import org.netbeans.spi.editor.hints.Severity;
 import org.netbeans.spi.java.classpath.support.ClassPathSupport;
 import org.netbeans.spi.java.hints.JavaFix;
 import org.openide.cookies.EditorCookie;
@@ -1212,7 +1214,7 @@ public class TextDocumentServiceImpl implements TextDocumentService, LanguageCli
                             newFilePath = newFile.getPath();
                             documentChanges.add(Either.forRight(new CreateFile(newFilePath)));
                         }
-                        for (FileObject fileObject : changes.getModifiedFileObjects()) {
+                        outer: for (FileObject fileObject : changes.getModifiedFileObjects()) {
                             List<? extends ModificationResult.Difference> diffs = changes.getDifferences(fileObject);
                             if (diffs != null) {
                                 List<TextEdit> edits = new ArrayList<>();
@@ -1224,6 +1226,7 @@ public class TextDocumentServiceImpl implements TextDocumentService, LanguageCli
                                                     Collections.singletonList(new TextEdit(new Range(Utils.createPosition(fileObject, 0), Utils.createPosition(fileObject, 0)),
                                                             newText != null ? newText : "")))));
                                         }
+                                        continue outer;
                                     } else {
                                         edits.add(new TextEdit(new Range(Utils.createPosition(fileObject, diff.getStartPosition().getOffset()),
                                                                          Utils.createPosition(fileObject, diff.getEndPosition().getOffset())),
@@ -1601,7 +1604,14 @@ public class TextDocumentServiceImpl implements TextDocumentService, LanguageCli
                 }, "errors", false);
                 BACKGROUND_TASKS.create(() -> {
                     computeDiags(u, (info, doc) -> {
-                        return new HintsInvoker(HintsSettings.getGlobalSettings(), new AtomicBoolean()).computeHints(info);
+                        Set<Severity> disabled = org.netbeans.modules.java.hints.spiimpl.Utilities.disableErrors(info.getFileObject());
+                        if (disabled.size() == Severity.values().length) {
+                            return Collections.emptyList();
+                        }
+                        return new HintsInvoker(HintsSettings.getGlobalSettings(), new AtomicBoolean()).computeHints(info)
+                                                                                                       .stream()
+                                                                                                       .filter(ed -> !disabled.contains(ed.getSeverity()))
+                                                                                                       .collect(Collectors.toList());
                     }, "hints", true);
                 }).schedule(DELAY);
             });
