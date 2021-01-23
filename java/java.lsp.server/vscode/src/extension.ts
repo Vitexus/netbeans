@@ -156,6 +156,14 @@ export function activate(context: ExtensionContext): VSNetBeansAPI {
 
     // find acceptable JDK and launch the Java part
     findJDK((specifiedJDK) => {
+        let currentClusters = findClusters(context.extensionPath).sort();
+        context.subscriptions.push(vscode.extensions.onDidChange(() => {
+            const newClusters = findClusters(context.extensionPath).sort();
+            if (newClusters.length !== currentClusters.length || newClusters.find((value, index) => value !== currentClusters[index])) {
+                currentClusters = newClusters;
+                activateWithJDK(specifiedJDK, context, log, true);
+            }
+        }));
         activateWithJDK(specifiedJDK, context, log, true);
     });
 
@@ -201,6 +209,21 @@ export function activate(context: ExtensionContext): VSNetBeansAPI {
                 editor.document.uri,
                 editor.document.positionAt(offset),
             ]);
+        }
+    }));
+    context.subscriptions.push(commands.registerCommand('java.debug.codelens', async (uri, methodName) => {
+        const editor = window.activeTextEditor;
+        if (editor) {
+            const docUri = editor.document.uri;
+            const workspaceFolder = vscode.workspace.getWorkspaceFolder(docUri);
+            const debugConfig = {
+                type: "java8+",
+                name: "CodeLens Debug",
+                request: "launch",
+                mainClass: uri,
+                singleMethod: methodName,
+            };
+            await vscode.debug.startDebugging(workspaceFolder, debugConfig).then();
         }
     }));
     return Object.freeze({

@@ -24,11 +24,13 @@ import com.sun.source.tree.ClassTree;
 import com.sun.source.tree.CompilationUnitTree;
 import com.sun.source.tree.LineMap;
 import com.sun.source.tree.MethodTree;
+import com.sun.source.tree.PrimitiveTypeTree;
 import com.sun.source.tree.Scope;
 import com.sun.source.tree.Tree;
 import com.sun.source.tree.Tree.Kind;
 import com.sun.source.tree.VariableTree;
 import com.sun.source.util.TreePath;
+import com.sun.source.util.TreePathScanner;
 import com.vladsch.flexmark.html2md.converter.FlexmarkHtmlConverter;
 import java.io.File;
 import java.io.IOException;
@@ -59,12 +61,14 @@ import java.util.stream.Collectors;
 import javax.lang.model.element.Element;
 import javax.lang.model.element.ElementKind;
 import javax.lang.model.element.ExecutableElement;
+import javax.lang.model.element.Modifier;
 import javax.lang.model.element.TypeElement;
 import javax.lang.model.element.TypeParameterElement;
 import javax.lang.model.element.VariableElement;
 import javax.lang.model.type.ArrayType;
 import javax.lang.model.type.DeclaredType;
 import javax.lang.model.type.ExecutableType;
+import javax.lang.model.type.TypeKind;
 import javax.lang.model.type.TypeMirror;
 import javax.lang.model.util.Elements;
 import javax.swing.text.BadLocationException;
@@ -96,6 +100,9 @@ import org.eclipse.lsp4j.DocumentOnTypeFormattingParams;
 import org.eclipse.lsp4j.DocumentRangeFormattingParams;
 import org.eclipse.lsp4j.DocumentSymbol;
 import org.eclipse.lsp4j.DocumentSymbolParams;
+import org.eclipse.lsp4j.FoldingRange;
+import org.eclipse.lsp4j.FoldingRangeKind;
+import org.eclipse.lsp4j.FoldingRangeRequestParams;
 import org.eclipse.lsp4j.Hover;
 import org.eclipse.lsp4j.HoverParams;
 import org.eclipse.lsp4j.InsertTextFormat;
@@ -136,6 +143,7 @@ import org.netbeans.api.java.source.CompilationInfo.CacheClearPolicy;
 import org.netbeans.api.java.source.ElementHandle;
 import org.netbeans.api.java.source.GeneratorUtilities;
 import org.netbeans.api.java.source.JavaSource;
+import org.netbeans.api.java.source.JavaSource.Phase;
 import org.netbeans.api.java.source.ModificationResult;
 import org.netbeans.api.java.source.SourceUtils;
 import org.netbeans.api.java.source.Task;
@@ -149,9 +157,12 @@ import org.netbeans.modules.editor.java.GoToSupport;
 import org.netbeans.modules.editor.java.GoToSupport.Context;
 import org.netbeans.modules.editor.java.GoToSupport.GoToTarget;
 import org.netbeans.modules.editor.java.Utilities;
+import org.netbeans.modules.gsf.testrunner.ui.api.TestMethodController.TestMethod;
 import org.netbeans.modules.java.completion.JavaCompletionTask;
 import org.netbeans.modules.java.completion.JavaCompletionTask.Options;
 import org.netbeans.modules.java.completion.JavaDocumentationTask;
+import org.netbeans.modules.java.editor.base.fold.JavaElementFoldVisitor;
+import org.netbeans.modules.java.editor.base.fold.JavaElementFoldVisitor.FoldCreator;
 import org.netbeans.modules.java.editor.base.semantic.MarkOccurrencesHighlighterBase;
 import org.netbeans.modules.java.editor.codegen.GeneratorUtils;
 import org.netbeans.modules.java.editor.options.MarkOccurencesSettings;
@@ -170,6 +181,7 @@ import org.netbeans.modules.java.lsp.server.Utils;
 import org.netbeans.modules.java.lsp.server.debugging.utils.ErrorUtilities;
 import org.netbeans.modules.java.source.ElementHandleAccessor;
 import org.netbeans.modules.java.source.ui.ElementOpenAccessor;
+import org.netbeans.modules.java.testrunner.ui.spi.ComputeTestMethods;
 import org.netbeans.modules.parsing.api.ParserManager;
 import org.netbeans.modules.parsing.api.ResultIterator;
 import org.netbeans.modules.parsing.api.Source;
@@ -1344,8 +1356,56 @@ public class TextDocumentServiceImpl implements TextDocumentService, LanguageCli
     //end copied
 
     @Override
-    public CompletableFuture<List<? extends CodeLens>> codeLens(CodeLensParams arg0) {
-        throw new UnsupportedOperationException("Not supported yet.");
+    public CompletableFuture<List<? extends CodeLens>> codeLens(CodeLensParams params) {
+        JavaSource source = getSource(params.getTextDocument().getUri());
+        if (source == null) {
+            return CompletableFuture.completedFuture(Collections.emptyList());
+        }
+        CompletableFuture<List<? extends CodeLens>> result = new CompletableFuture<>();
+        try {
+            source.runUserActionTask(cc -> {
+                cc.toPhase(Phase.ELEMENTS_RESOLVED);
+                List<CodeLens> lens = new ArrayList<>();
+                //look for test methods:
+                for (ComputeTestMethods.Factory methodsFactory : Lookup.getDefault().lookupAll(ComputeTestMethods.Factory.class)) {
+                    List<TestMethod> methods = methodsFactory.create().computeTestMethods(cc);
+                    if (methods != null) {
+                        for (TestMethod method : methods) {
+                            Range range = new Range(Utils.createPosition(cc.getCompilationUnit(), method.start().getOffset()),
+                                                    Utils.createPosition(cc.getCompilationUnit(), method.end().getOffset()));
+                            List<Object> arguments = Arrays.asList(new Object[]{method.method().getFile().toURI(), method.method().getMethodName()});
+                            lens.add(new CodeLens(range,
+                                                  new Command("Run test", Server.JAVA_TEST_SINGLE_METHOD, arguments),
+                                                  null));
+                            lens.add(new CodeLens(range,
+                                                  new Command("Debug test", "java.debug.codelens", arguments),
+                                                  null));
+                        }
+                    }
+                }
+                //look for main methods:
+                new TreePathScanner<Void, Void>() {
+                    public Void visitMethod(MethodTree tree, Void p) {
+                        Element el = cc.getTrees().getElement(getCurrentPath());
+                        if (el != null && el.getKind() == ElementKind.METHOD && SourceUtils.isMainMethod((ExecutableElement) el)) {
+                            Range range = Utils.treeRange(cc, tree);
+                            List<Object> arguments = Collections.singletonList(params.getTextDocument().getUri());
+                            lens.add(new CodeLens(range,
+                                                  new Command("Run main", Server.JAVA_RUN_MAIN_METHOD, arguments),
+                                                  null));
+                            lens.add(new CodeLens(range,
+                                                  new Command("Debug main", "java.debug.codelens", arguments),
+                                                  null));
+                        }
+                        return null;
+                    }
+                }.scan(cc.getCompilationUnit(), null);
+                result.complete(lens);
+            }, true);
+        } catch (IOException ex) {
+            result.completeExceptionally(ex);
+        }
+        return result;
     }
 
     @Override
@@ -1522,6 +1582,65 @@ public class TextDocumentServiceImpl implements TextDocumentService, LanguageCli
                 result.completeExceptionally(ex);
             }
         });
+        return result;
+    }
+
+    @Override
+    public CompletableFuture<List<FoldingRange>> foldingRange(FoldingRangeRequestParams params) {
+        JavaSource source = getSource(params.getTextDocument().getUri());
+        if (source == null) {
+            return CompletableFuture.completedFuture(Collections.emptyList());
+        }
+        CompletableFuture<List<FoldingRange>> result = new CompletableFuture<>();
+        try {
+            source.runUserActionTask(cc -> {
+                cc.toPhase(JavaSource.Phase.RESOLVED);
+                Document doc = cc.getSnapshot().getSource().getDocument(true);
+                JavaElementFoldVisitor v = new JavaElementFoldVisitor(cc, cc.getCompilationUnit(), cc.getTrees().getSourcePositions(), doc, new FoldCreator<FoldingRange>() {
+                    @Override
+                    public FoldingRange createImportsFold(int start, int end) {
+                        return createFold(start, end, FoldingRangeKind.Imports);
+                    }
+
+                    @Override
+                    public FoldingRange createInnerClassFold(int start, int end) {
+                        return createFold(start, end, FoldingRangeKind.Region);
+                    }
+
+                    @Override
+                    public FoldingRange createCodeBlockFold(int start, int end) {
+                        return createFold(start, end, FoldingRangeKind.Region);
+                    }
+
+                    @Override
+                    public FoldingRange createJavadocFold(int start, int end) {
+                        return createFold(start, end, FoldingRangeKind.Comment);
+                    }
+
+                    @Override
+                    public FoldingRange createInitialCommentFold(int start, int end) {
+                        return createFold(start, end, FoldingRangeKind.Comment);
+                    }
+
+                    private FoldingRange createFold(int start, int end, String kind) {
+                        Position startPos = Utils.createPosition(cc.getCompilationUnit(), start);
+                        Position endPos = Utils.createPosition(cc.getCompilationUnit(), end);
+                        FoldingRange range = new FoldingRange(startPos.getLine(), endPos.getLine());
+
+                        range.setStartCharacter(startPos.getCharacter());
+                        range.setEndCharacter(endPos.getCharacter());
+                        range.setKind(kind);
+
+                        return range;
+                    }
+                });
+                v.checkInitialFold();
+                v.scan(cc.getCompilationUnit(), null);
+                result.complete(v.getFolds());
+            }, true);
+        } catch (IOException ex) {
+            result.completeExceptionally(ex);
+        }
         return result;
     }
 
