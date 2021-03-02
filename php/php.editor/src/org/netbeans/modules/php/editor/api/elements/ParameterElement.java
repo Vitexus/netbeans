@@ -47,12 +47,12 @@ public interface ParameterElement {
 
     enum OutputType {
         /**
-         * Represents: <code>array &$foo = VERY_SUPER_LONG_DEFAULT_VALUE</code>.
+         * Represents: <code>public array &$foo = VERY_SUPER_LONG_DEFAULT_VALUE</code>.
          */
         COMPLETE_DECLARATION,
 
         /**
-         * Represents: <code>array &$foo = ...</code>.
+         * Represents: <code>private array &$foo = ...</code>.
          */
         SHORTEN_DECLARATION,
 
