@@ -28,6 +28,7 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.EventListener;
 import java.util.List;
 import java.util.Map;
@@ -35,6 +36,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Semaphore;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -51,6 +53,7 @@ import org.netbeans.modules.cnd.debugger.gdb2.mi.MIConst;
 import org.netbeans.modules.cnd.debugger.gdb2.mi.MIProxy;
 import org.netbeans.modules.cnd.debugger.gdb2.mi.MIRecord;
 import org.netbeans.modules.cnd.debugger.gdb2.mi.MITList;
+import org.netbeans.modules.cnd.debugger.gdb2.mi.MITListItem;
 import org.netbeans.modules.cnd.debugger.gdb2.mi.MIValue;
 import org.netbeans.modules.cpplite.debugger.breakpoints.CPPLiteBreakpoint;
 import org.netbeans.modules.nativeexecution.api.ExecutionEnvironmentFactory;
@@ -91,6 +94,7 @@ public final class CPPLiteDebugger {
     private final ThreadsCollector      threadsCollector = new ThreadsCollector(this);
     private volatile CPPThread          currentThread;
     private volatile CPPFrame           currentFrame;
+    private AtomicInteger               exitCode = new AtomicInteger();
 
     public CPPLiteDebugger(ContextProvider contextProvider) {
         this.contextProvider = contextProvider;
@@ -116,6 +120,8 @@ public final class CPPLiteDebugger {
             } catch (IOException ex) {
                 Exceptions.printStackTrace(ex);
             }
+            // Debug I/O has finished.
+            finish(false);
         }).start();
 
         proxy.waitStarted();
@@ -125,6 +131,10 @@ public final class CPPLiteDebugger {
         proxy.send(new Command("-gdb-set target-async"));
         //proxy.send(new Command("-gdb-set scheduler-locking on"));
         proxy.send(new Command("-gdb-set non-stop on"));
+        proxy.send(new Command("-gdb-set print object on"));
+    }
+
+    public void execRun() {
         proxy.send(new Command("-exec-run"));
     }
 
@@ -350,14 +360,23 @@ public final class CPPLiteDebugger {
         proxy.send(new Command("-exec-continue --all"));
     }
 
-    void finish () {
+    void finish (boolean sendExit) {
+        finish(sendExit, 0);
+    }
+
+    private void finish (boolean sendExit, int exitCode) {
+        if (exitCode != 0) {
+            this.exitCode.set(exitCode);
+        }
         LOGGER.fine("CPPLiteDebugger.finish()");
         if (finished) {
             LOGGER.fine("finish(): already finished.");
             return ;
         }
         breakpointsHandler.dispose();
-        proxy.send(new Command("-gdb-exit"));
+        if (sendExit) {
+            proxy.send(new Command("-gdb-exit"));
+        }
         Utils.unmarkCurrent ();
         engineProvider.getDestructor().killEngine();
         finished = true;
@@ -365,6 +384,46 @@ public final class CPPLiteDebugger {
         LOGGER.fine("finish() done, build finished.");
     }
 
+    public String readMemory(String address, long offset, int length) {
+        MIRecord memory;
+        String offsetArg;
+        if (offset != 0) {
+            offsetArg = "-o " + offset + " ";
+        } else {
+            offsetArg = "";
+        }
+        try {
+            memory = sendAndGet("-data-read-memory-bytes " + offsetArg + address + " " + length);
+        } catch (InterruptedException ex) {
+            return null;
+        }
+        MIValue memoryValue = memory.results().valueOf("memory");
+        if (memoryValue instanceof MITList) {
+            MITList memoryList = (MITList) memoryValue;
+            if (!memoryList.isEmpty()) {
+                MITListItem row = memoryList.get(0);
+                if (row instanceof MITList) {
+                    String contents = ((MITList) row).getConstValue("contents");
+                    return contents;
+                }
+            }
+        }
+        return null;
+    }
+
+    public String getVersion() {
+        MIRecord versionRecord;
+        try {
+            versionRecord = sendAndGet("-gdb-version");
+        } catch (InterruptedException ex) {
+            return null;
+        }
+        return versionRecord.command().getConsoleStream();
+    }
+
+    ContextProvider getContextProvider() {
+        return contextProvider;
+    }
 
     DebuggingView.DVSupport getDVSupport() {
         return contextProvider.lookupFirst(null, DebuggingView.DVSupport.class);
@@ -377,6 +436,7 @@ public final class CPPLiteDebugger {
         private final CountDownLatch runningLatch = new CountDownLatch(1);
         private final CountDownLatch runningCommandLatch = new CountDownLatch(0);
         private final Semaphore runningCommandSemaphore = new Semaphore(1);
+        private final Object sendLock = new Object();
 
         LiteMIProxy(MICommandInjector injector, String prompt, String encoding) {
             super(injector, prompt, encoding);
@@ -411,29 +471,43 @@ public final class CPPLiteDebugger {
                         }
                         CPPThread thread = threadsCollector.get(threadId);
                         String reason = results.getConstValue("reason", "");
-                        switch (reason) {
-                            case "exited-normally":
-                                if ('*' == record.type()) {
-                                    finish();
+                        if (reason.startsWith("exited")) {
+                            if ('*' == record.type()) {
+                                int exitCode;
+                                if ("exited-normally".equals(reason)) {
+                                    exitCode = 0;
                                 } else {
-                                    threadsCollector.remove(threadId);
-                                }
-                                break;
-                            default:
-                                MITList topFrameList = (MITList) results.valueOf("frame");
-                                CPPFrame frame = topFrameList != null ? new CPPFrame(thread, topFrameList) : null;
-                                thread.setTopFrame(frame);
-                                setSuspended(true, thread, frame);
-                                if (frame != null) {
-                                    Line currentLine = frame.location();
-                                    if (currentLine != null) {
-                                        Annotatable[] lines = new Annotatable[] {currentLine};
-                                        CPPLiteDebugger.this.currentLine = lines;
-                                        Utils.markCurrent(lines);
-                                        Utils.showLine(lines);
+                                    String exitCodeStr = results.getConstValue("exit-code", null);
+                                    if (exitCodeStr != null) {
+                                        if (exitCodeStr.startsWith("0x")) {
+                                            exitCode = Integer.parseInt(exitCodeStr, 16);
+                                        } else if (exitCodeStr.startsWith("0")) {
+                                            exitCode = Integer.parseInt(exitCodeStr, 8);
+                                        } else {
+                                            exitCode = Integer.parseInt(exitCodeStr);
+                                        }
+                                    } else {
+                                        exitCode = 0;
                                     }
                                 }
-                                break;
+                                finish(true, exitCode);
+                            } else {
+                                threadsCollector.remove(threadId);
+                            }
+                        } else {
+                            MITList topFrameList = (MITList) results.valueOf("frame");
+                            CPPFrame frame = topFrameList != null ? CPPFrame.create(thread, topFrameList) : null;
+                            thread.setTopFrame(frame);
+                            setSuspended(true, thread, frame);
+                            if (frame != null) {
+                                Line currentLine = frame.location();
+                                if (currentLine != null) {
+                                    Annotatable[] lines = new Annotatable[] {currentLine};
+                                    CPPLiteDebugger.this.currentLine = lines;
+                                    Utils.markCurrent(lines);
+                                    Utils.showLine(lines);
+                                }
+                            }
                         }
                         break;
                     case "running":
@@ -497,8 +571,18 @@ public final class CPPLiteDebugger {
         void send(MICommand cmd, boolean waitForRunning) {
             if (waitForRunning) {
                 waitRunning();
+                send(cmd);
+            } else {
+                try {
+                    startedLatch.await();
+                } catch (InterruptedException ex) {
+                    Exceptions.printStackTrace(ex);
+                }
+                LOGGER.log(Level.FINE, "MIProxy.send({0})", cmd);
+                synchronized (sendLock) {
+                    super.send(cmd);
+                }
             }
-            send(cmd);
         }
 
         @Override
@@ -510,7 +594,9 @@ public final class CPPLiteDebugger {
                 Exceptions.printStackTrace(ex);
             }
             LOGGER.log(Level.FINE, "MIProxy.send({0})", cmd);
-            super.send(cmd);
+            synchronized (sendLock) {
+                super.send(cmd);
+            }
         }
 
         @Override
@@ -548,40 +634,41 @@ public final class CPPLiteDebugger {
 
     }
 
-    public static @NonNull Pair<DebuggerEngine, Process> startDebugging (CPPLiteDebuggerConfig configuration) throws IOException {
-        DebuggerInfo di = DebuggerInfo.create (
-            "CPPLiteDebuggerInfo",
-            new Object[] {
-                new SessionProvider () {
-                    @Override
-                    public String getSessionName () {
-                        return configuration.getDisplayName ();
-                    }
-
-                    @Override
-                    public String getLocationName () {
-                        return "localhost";
-                    }
-
-                    @Override
-                    public String getTypeID () {
-                        return "CPPLiteSession";
-                    }
-
-                    @Override
-                    public Object[] getServices () {
-                        return new Object[] {};
-                    }
-                },
-                configuration
+    public static @NonNull Pair<DebuggerEngine, Process> startDebugging (CPPLiteDebuggerConfig configuration, Object... services) throws IOException {
+        SessionProvider sessionProvider = new SessionProvider () {
+            @Override
+            public String getSessionName () {
+                return configuration.getDisplayName ();
             }
+
+            @Override
+            public String getLocationName () {
+                return "localhost";
+            }
+
+            @Override
+            public String getTypeID () {
+                return "CPPLiteSession";
+            }
+
+            @Override
+            public Object[] getServices () {
+                return new Object[] {};
+            }
+        };
+        Object[] allServices = Arrays.copyOf(services, services.length + 2);
+        allServices[services.length] = sessionProvider;
+        allServices[services.length + 1] = configuration;
+        DebuggerInfo di = DebuggerInfo.create(
+            "CPPLiteDebuggerInfo",
+            allServices
         );
         DebuggerEngine[] es = DebuggerManager.getDebuggerManager ().
             startDebugging (di);
         Pty pty = PtySupport.allocate(ExecutionEnvironmentFactory.getLocal());
         CPPLiteDebugger debugger = es[0].lookupFirst(null, CPPLiteDebugger.class);
         List<String> executable = new ArrayList<>();
-        executable.add("gdb");
+        executable.add(configuration.getDebugger());
         executable.add("--interpreter=mi");
         executable.add("--tty=" + pty.getSlaveName());
         executable.addAll(configuration.getExecutable());
@@ -604,6 +691,7 @@ public final class CPPLiteDebugger {
             }
         });
         debugger.setDebuggee(debuggee);
+        AtomicInteger exitCode = debugger.exitCode;
 
         return Pair.of(es[0], new Process() {
             @Override
@@ -622,8 +710,14 @@ public final class CPPLiteDebugger {
             }
 
             @Override
+            public boolean isAlive() {
+                return debuggee.isAlive();
+            }
+
+            @Override
             public int waitFor() throws InterruptedException {
-                return debuggee.waitFor();
+                debuggee.waitFor();
+                return exitCode.get();
             }
 
             @Override
@@ -700,30 +794,27 @@ public final class CPPLiteDebugger {
         }
 
         private void addBreakpoint(CPPLiteBreakpoint breakpoint) {
-            Line l = breakpoint.getLine();
-            FileObject source = l.getLookup().lookup(FileObject.class);
-            File sourceFile = source != null ? FileUtil.toFile(source) : null;
-            if (sourceFile != null) {
-                String disabled = breakpoint.isEnabled() ? "" : "-d ";
-                Command command = new Command("-break-insert " + disabled + sourceFile.getAbsolutePath() + ":" + (l.getLineNumber() + 1)) {
-                    @Override
-                    protected void onDone(MIRecord record) {
-                        MIValue bkpt = record.results().valueOf("bkpt");
-                        if (bkpt instanceof MITList) {
-                            breakpointResolved(breakpoint, (MITList) bkpt);
-                        }
-                        super.onDone(record);
+            String path = breakpoint.getFilePath();
+            int lineNumber = breakpoint.getLineNumber();
+            String disabled = breakpoint.isEnabled() ? "" : "-d ";
+            Command command = new Command("-break-insert " + disabled + path + ":" + lineNumber) {
+                @Override
+                protected void onDone(MIRecord record) {
+                    MIValue bkpt = record.results().valueOf("bkpt");
+                    if (bkpt instanceof MITList) {
+                        breakpointResolved(breakpoint, (MITList) bkpt);
                     }
+                    super.onDone(record);
+                }
 
-                    @Override
-                    protected void onError(MIRecord record) {
-                        String msg = record.results().getConstValue("msg");
-                        breakpointError(breakpoint, msg);
-                        super.onError(record);
-                    }
-                };
-                proxy.send(command);
-            }
+                @Override
+                protected void onError(MIRecord record) {
+                    String msg = record.results().getConstValue("msg");
+                    breakpointError(breakpoint, msg);
+                    super.onError(record);
+                }
+            };
+            proxy.send(command, false);
             breakpoint.addPropertyChangeListener(this);
         }
 

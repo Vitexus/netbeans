@@ -150,6 +150,12 @@
          can be attached to that port, make the <code>netbeans-gradle-tooling</code>
          project debuggable in action.
      </api>
+     <api category="friend" group="property" name="runJvmArgs" type="export">
+         NetBeans Tooling plugin recognizes <code>runJvmArgs</code> project property, and injects
+         specified JVM arguments into JavaExec executing the user code. Use <code>-PrunJvmArgs=...</code>.
+         If passing more arguments, the whole -P must be properly quoted. Arguments that contain spaces must
+         also use quoting or escapes.
+     </api>
  </answer>
 
  <answer id="resources-file">
@@ -261,6 +267,13 @@ publishPlugins&lt;/args&gt;
 
 &lt;/actions&gt;
              </pre>
+         </api>
+         <api category="devel" group="java.io.File" name="nb-actions-config.xml" type="export">
+             <p>
+                 An extension of <a href="#nb-actions-config.xml">nb-actions.config</a> is a per-Configuration action mapping.
+                 It can be placed in <b>nb-actions-</b><i>configurationID</i><b>.xml</b> with the same format and will apply only
+                 if that specific Project Configuration is in effect.
+             </p>
          </api>
      </p>
  </answer>
@@ -902,6 +915,10 @@ publishPlugins&lt;/args&gt;
          can be placed into <code>lookup</code>. It is then notified when the
          execution of the action is finished. Useful when writing tests.
      </p>
+    </api>
+    <api group="lookup" name="project-actions" type="export" category="private">
+        The <a href="@TOP@/org/netbeans/modules/gradle/spi/actions/GradleActionsProvider.html">GradleActionProviders</a> can be also activated for individual Plugins; 
+        register them for project type <code>org-netbeans-modules-gradle/Plugins/&lt;plugin-id></code>. 
     </api>
   </p>
  </answer>
